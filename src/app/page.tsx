@@ -22,9 +22,9 @@ export default async function Home() {
             Anurag <span className="text-primary">Maurya</span>
           </h1>
           <p className="text-lg md:text-xl text-muted-foreground font-mono max-w-2xl">
-            // FULL STACK ENGINEER
+            // AI | FULLSTACK ENGINEER
             <br />
-            // BUILDING DIGITAL SYSTEMS
+            // BUILDING STUFFS THAT MATTER
           </p>
         </header>
 
@@ -32,13 +32,13 @@ export default async function Home() {
           <div className="flex items-center justify-between mb-8 border-b border-border pb-2">
             <h2 className="text-xl font-bold uppercase flex items-center gap-2">
               <span className="w-2 h-2 bg-primary"></span>
-              Recent Logs
+              Recent Blogs
             </h2>
             <Link
               href="/blog"
               className="text-xs font-mono text-primary hover:text-white transition-colors uppercase tracking-wider"
             >
-              [ View All Logs ]
+              [ View All Blogs ]
             </Link>
           </div>
 
