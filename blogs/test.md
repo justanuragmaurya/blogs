@@ -1,101 +1,492 @@
 ---
-title: "The Hidden Cost of AI-Assisted Coding When You're Learning"
-date: "2026-01-17"
-description: "Why relying on AI tools like Copilot and ChatGPT might be sabotaging your growth as a developer."
-tags: ["programming", "learning", "ai", "opinion"]
+title: "From Bytes to Bytes: Building a Raw HTTP Server in Rust"
+date: "2026-02-01"
+description: "A deep dive into implementing the HTTP protocol from scratch. We cover reading raw TCP streams, manual string parsing, and building a custom request parser in Rust without using any web frameworks."
+tags: ["rust", "systems-programming", "http", "backend", "learning"]
+categories: ["projects", "engineering"]
 ---
 
-# The Hidden Cost of AI-Assisted Coding When You're Learning
+# Building an HTTP Server from Scratch in Rust: Understanding Raw TCP
 
-AI coding assistants are everywhere. GitHub Copilot, ChatGPT, Claude, Cursor—they promise to make you 10x more productive. And they do. But there's a catch nobody talks about: **if you're still learning, they might be making you worse.**
+> This project is an implementation of an HTTP server where I wrote code that listens to incoming byte streams on a TCP server port and converts those raw bytes into a processable string/struct of request.
 
-I've been thinking about this a lot lately. As someone who both uses these tools and teaches others to code, I've noticed a disturbing pattern.
+## Introduction
 
-![AI and Human Brain Interface](https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&w=1200&q=80)
+Have you ever wondered what happens under the hood when your browser makes a request to a server? Most developers use high-level frameworks like Express, Actix, or Rocket that abstract away all the networking details. But understanding how HTTP actually works at the TCP level gives you a much deeper appreciation of web development.
 
-## The Illusion of Understanding
+In this blog, I'll walk you through building an HTTP server from scratch in Rust, using nothing but raw TCP sockets. No HTTP libraries, no web frameworks—just pure bytes and parsing.
 
-When AI writes your code, you feel like you understand it. You read through it, it makes sense, you move on. But there's a difference between **recognizing** correct code and **producing** it.
+## Project Structure
 
-This is called the **fluency illusion**—the dangerous gap between thinking you know something and actually knowing it.
+```
+raw_http/
+├── Cargo.toml
+├── src/
+│   ├── main.rs      # Entry point and TCP listener
+│   ├── parser.rs    # HTTP request parsing
+│   ├── router.rs    # Route handling logic
+│   └── types.rs     # Data structures
+└── files/           # Directory for file operations
+```
 
-Consider this: if I asked you to close your laptop right now and write a binary search algorithm on paper, could you do it? Most developers who've only used AI assistance would struggle. They've seen the code a hundred times. They've never truly written it.
+## The Core Concept
 
-## The Debugging Deficit
+HTTP is just text sent over TCP. When your browser sends a request, it's really just sending a formatted string like this:
 
-Here's what happens when you rely on AI:
+```
+GET /files HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
 
-1. You encounter a bug
-2. You paste it into ChatGPT
-3. AI gives you a fix
-4. You apply it
-5. It works
-6. You move on
+```
 
-What's missing? **The struggle.** The 45 minutes of staring at stack traces. The moment where you finally understand why your variable was undefined. That painful, frustrating process is exactly what builds intuition.
+Our job is to:
+1. Listen for TCP connections
+2. Read the raw bytes from the stream
+3. Parse those bytes into a structured request
+4. Route the request to the appropriate handler
+5. Send back a properly formatted HTTP response
 
-When AI removes the struggle, it removes the learning.
+## Dependencies
 
-![Developer frustrated at computer screen](https://images.unsplash.com/photo-1504639725590-34d0984388bd?auto=format&fit=crop&w=1200&q=80)
+We're keeping dependencies minimal. Here's our `Cargo.toml`:
 
-## You Stop Asking "Why"
+```toml
+[package]
+name = "raw_http"
+version = "0.1.0"
+edition = "2024"
 
-AI gives you answers. Fast ones. But learning to code isn't about answers—it's about questions.
+[dependencies]
+serde = {version = "1.0.228" , features = ["derive"]}
+serde_json = "1.0.149"
+```
 
-Why does this function return undefined? Why is this O(n²) instead of O(n)? Why does JavaScript hoist variables but not let/const?
+We only use `serde` and `serde_json` for JSON body parsing—everything else is pure Rust standard library.
 
-When you use AI, you optimize for **what works**. When you learn properly, you optimize for **why it works**. These are fundamentally different goals.
+## Step 1: Defining Our Data Types
 
-## The Copy-Paste Developer
+First, let's define the structures we'll use to represent HTTP requests. In `types.rs`:
 
-I've interviewed candidates who have impressive GitHub profiles. Clean code. Modern patterns. Well-structured projects.
+```rust
+use std::collections::HashMap;
+use serde::{Serialize,Deserialize};
 
-Then I ask them to solve a simple problem on a whiteboard. No AI. No Google. Just them and the problem.
+#[derive(Debug,Serialize,Deserialize)]
+pub struct Request{
+    pub method:String,
+    pub path:String,
+    pub version:String,
+    pub headers:HashMap<String,String>,
+    pub body:String
+}
+```
 
-They freeze.
+The `Request` struct captures everything we need from an HTTP request:
+- **method**: GET, POST, PUT, DELETE, etc.
+- **path**: The URL path like `/files` or `/create`
+- **version**: HTTP version (usually `HTTP/1.1`)
+- **headers**: Key-value pairs like `Content-Type: application/json`
+- **body**: The request payload for POST/PUT requests
 
-This is the new reality. We're creating a generation of developers who can orchestrate AI but can't think independently. They're copy-paste developers with extra steps.
+We also define structures for our API's JSON payloads:
 
-![Person writing code on whiteboard](https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80)
+```rust
+#[derive(Debug,Serialize,Deserialize)]
+pub struct FileCreateRequest{
+    pub filename:String,
+    pub filecontent:String
+}
 
-## Atrophied Problem-Solving Skills
+#[derive(Debug,Serialize,Deserialize)]
+pub struct FileReadRequest{
+    pub filename:String,
+}
+```
 
-Coding is problem decomposition. You take a big problem, break it into smaller ones, solve each piece, and combine them. This skill transfers to everything—debugging, system design, life decisions.
+## Step 2: The TCP Listener
 
-When AI solves problems for you, this muscle atrophies. You become dependent. The moment the AI doesn't have an answer, you're stuck.
+The heart of our server lives in `main.rs`. Let's start with the entry point:
 
-I've seen junior developers completely paralyzed when their AI tool goes down. They literally cannot write a for-loop without assistance. That's not productivity—that's dependency.
+```rust
+mod router; mod parser; mod types;
+use types::*; use router::*; use parser::*;
+use std::{io::{Read, Write}, net::TcpListener};
 
-## What You Should Do Instead
+fn main(){
+    let listener = TcpListener::bind("127.0.0.1:8080").expect("Error connecting to the port");
 
-I'm not saying never use AI. I'm saying be strategic:
+    for stream in listener.incoming(){
+        let mut stream = stream.unwrap();
 
-**When learning something new:** Turn off AI completely. Write bad code. Get stuck. Google the error message yourself. Read documentation. Feel the pain. That pain is learning.
+        let request = read_http_request(&mut stream);
+        let req = parse_request(&request);
+        req_handler(&mut stream, &req);
+    }
+}
+```
 
-**When practicing:** Do LeetCode problems without AI. Write projects from scratch. Implement algorithms you've only read about. Build muscle memory.
+This is remarkably simple:
+1. Bind to port 8080 on localhost
+2. Wait for incoming connections
+3. For each connection, read the raw HTTP request
+4. Parse it into our `Request` struct
+5. Handle the request and send a response
 
-**When working:** Use AI for boilerplate, for speeding up known patterns, for exploring unfamiliar APIs. But never for core logic you don't understand.
+## Step 3: Reading Raw HTTP Requests
 
-**The 24-hour rule:** If AI writes code for you, come back 24 hours later and try to write it yourself without looking. If you can't, you didn't learn anything.
+Here's where it gets interesting. HTTP requests are just bytes, and we need to read them carefully. The tricky part? We don't know how long the request is until we read the headers.
 
-![Person studying with books and laptop](https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=crop&w=1200&q=80)
+```rust
+fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+    let mut buffer = [0; 1024];
+    let mut data = Vec::new();
 
-## The Uncomfortable Truth
+    loop {
+        let n = stream.read(&mut buffer).unwrap();
+        if n == 0 {
+            break;
+        }
 
-The developers who will thrive in 10 years aren't the ones who are best at prompting AI. They're the ones who understand systems deeply enough to know when AI is wrong.
+        data.extend_from_slice(&buffer[..n]);
 
-And AI is wrong a lot. It hallucinates. It uses deprecated APIs. It writes inefficient code. It misunderstands context.
+        if data.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+    }
+```
 
-If you can't identify these mistakes—if you don't have the foundational knowledge to evaluate AI output—you're not a developer. You're a middleman.
+We read bytes into a 1024-byte buffer in a loop. The key insight is that HTTP headers end with `\r\n\r\n` (a blank line). We use the `windows(4)` method to scan for this pattern.
 
-## Final Thoughts
+But wait—what about the body? POST requests have a body, and its length is specified in the `Content-Length` header:
 
-Learning to code has always been hard. It's supposed to be hard. The difficulty is the point.
+```rust
+    let raw = String::from_utf8_lossy(&data).to_string();
 
-AI tools promise to remove that difficulty. But in doing so, they remove the very thing that makes you a good developer: the deep understanding that only comes from struggle.
+    let content_length = raw
+    .lines()
+    .find(|l| l.to_lowercase().starts_with("content-length"))
+    .and_then(|l| l.split(": ").nth(1))
+    .and_then(|v| v.parse::<usize>().ok())
+    .unwrap_or(0);
 
-Use AI as a tool, not a crutch. Build foundations first. The shortcuts will always be there. Your window to truly learn the fundamentals won't be.
+    let body_start = raw.find("\r\n\r\n").unwrap() + 4;
+    let body_so_far = data.len() - body_start;
 
-The best investment you can make in your career isn't learning to prompt better. It's learning to code without prompts at all.
+    let mut remaining = content_length.saturating_sub(body_so_far);
 
-![Developer working late at night](https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1200&q=80)
+    while remaining > 0 {
+        let n = stream.read(&mut buffer).unwrap();
+        if n == 0 {
+            break;
+        }
+
+        data.extend_from_slice(&buffer[..n]);
+        remaining -= n;
+    }
+
+    String::from_utf8_lossy(&data).to_string()
+}
+```
+
+We:
+1. Convert bytes to a string to parse headers
+2. Find the `Content-Length` header
+3. Calculate how many body bytes we've already read
+4. Continue reading until we have the full body
+
+## Step 4: Parsing the HTTP Request
+
+Now that we have the raw string, we need to parse it into our `Request` struct. In `parser.rs`:
+
+```rust
+use crate::types::*;
+use std::collections::HashMap;
+
+pub fn parse_request(raw_req:&str)->Request{
+    let mut sections = raw_req.split("\r\n\r\n");
+
+    let header_section = sections.next().unwrap();
+    let body_section = sections.next().unwrap_or("");
+
+    let mut lines = header_section.lines();
+
+    let mut req_info = lines.next().unwrap().split_whitespace();
+
+    let (method,path,version)=(req_info.next().unwrap(),req_info.next().unwrap(),req_info.next().unwrap());
+
+    let headers = parse_headers(&mut lines);
+
+    return Request { 
+        method: method.to_string(), 
+        path: path.to_string(), 
+        version:version.to_string(), 
+        headers, 
+        body: body_section.to_string() 
+    };    
+}
+```
+
+The parsing logic follows the HTTP specification:
+1. Split on `\r\n\r\n` to separate headers from body
+2. The first line is always `METHOD PATH VERSION`
+3. Subsequent lines are headers until the blank line
+
+Header parsing is straightforward:
+
+```rust
+pub fn parse_headers(lines:&mut std::str::Lines)->HashMap<String,String>{
+    let mut headers = HashMap::<String,String>::new();
+
+    for line in lines{
+        if let Some((key , val)) = line.split_once(": "){
+            headers.insert(key.to_string(),val.to_string());
+        }
+    }
+
+    return headers;
+}
+```
+
+Each header line is `Key: Value`, so we split on `: ` and store in a HashMap.
+
+## Step 5: Handling CORS
+
+Before routing, we need to handle CORS (Cross-Origin Resource Sharing) for browser compatibility:
+
+```rust
+fn req_handler(stream: &mut std::net::TcpStream , req:&Request){
+    if req.method == "OPTIONS" {
+        let response = format!(
+            "HTTP/1.1 204 No Content\r\n{}\r\n\r\n",
+            cors_headers()
+        );
+
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+        return;
+    }
+
+    let response = route_handler(&req.method,&req.path,&req.body);
+
+    stream.write_all(response.as_bytes()).unwrap();
+    stream.flush().unwrap();
+}
+
+fn cors_headers() -> String {
+    [
+        "Access-Control-Allow-Origin: http://localhost:5173",
+        "Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS",
+        "Access-Control-Allow-Headers: Content-Type",
+    ]
+    .join("\r\n")
+}
+```
+
+Browsers send `OPTIONS` requests before actual requests to check if CORS is allowed. We respond with the appropriate headers.
+
+## Step 6: The Router
+
+Finally, our router in `router.rs` handles different endpoints. This is a File API that supports creating, reading, updating, and listing files:
+
+```rust
+pub fn route_handler(method: &String , path:&String , body:&String)->String{
+    let mut status = String::new();
+    let mut response_body= String::from("");
+    
+    match (method.as_str(),path.as_str()) {
+        ("GET","/")=>{
+            status.push_str("200 OK");
+            response_body.push_str("Hello welcome to File API");
+        },
+```
+
+We use Rust's powerful pattern matching to route requests based on method + path combinations.
+
+### Creating Files
+
+```rust
+        ("POST","/create")=>{
+            let body_json:Result<FileCreateRequest,serde_json::Error> = serde_json::from_str(body);
+            match body_json{
+                Ok(json)=>{
+                    let file = File::create(format!("./files/{}",json.filename));
+                    match file{
+                        Ok(mut file)=>{
+                            let contentsize = file.write_all(json.filecontent.as_bytes());
+                            match contentsize{
+                                Ok(_)=>{
+                                    status.push_str("200 OK");
+                                    response_body.push_str(format!("File created with name : {}",json.filename).as_str());
+                                },
+                                Err(_)=>{
+                                    status.push_str("500 Internal Server Error");
+                                    response_body.push_str("Error Writing to the file.");
+                                }
+                            }
+                        },
+                        Err(_)=>{
+                            status.push_str("500 Internal Server Error");
+                            response_body.push_str("Error Creating the file.");
+                        }
+                    }
+                }
+                Err(_)=>{
+                    status.push_str("500 Internal Server Error");
+                    response_body.push_str("Wrong request format of body.");
+                }
+            }
+        },
+```
+
+### Reading Files
+
+```rust
+        ("POST","/read")=>{
+            let body_json:Result<FileReadRequest, serde_json::Error> = serde_json::from_str(&body);
+
+            match body_json{
+                Ok(json)=>{
+                    let file = File::open(format!("./files/{}",json.filename));
+                    match file{
+                        Ok(mut file)=>{
+                            let mut file_content = String::new();
+                            let content = file.read_to_string(&mut file_content);
+                            match content{
+                                Ok(_)=>{
+                                    status.push_str("200 OK");
+                                    response_body.push_str(format!("Content of File:\r\n{}",&file_content).as_str());
+                                },
+                                Err(_)=>{
+                                    status.push_str("500 Internal Server Error");
+                                    response_body.push_str("Error reading the content of the file.")
+                                }
+                            }
+                        }
+                        Err(_)=>{
+                            status.push_str("400 Bad Request");
+                            response_body.push_str("File not found");
+                        }
+                    }
+                },
+                Err(_)=>{
+                    status.push_str("500 Internal Server Error");
+                    response_body.push_str("Wrong request format of body.");
+                }
+            }
+        },
+```
+
+### Listing All Files
+
+```rust
+        ("GET","/files")=>{
+            let mut file_names = Vec::new();
+            let files = fs::read_dir("./files").unwrap();
+
+            for file in files{
+                let file = file.unwrap();
+                if file.path().is_file(){
+                    if let Some(file_name) = file.path().file_name().and_then(OsStr::to_str){
+                        file_names.push(String::from(file_name));
+                    }
+                }
+            }
+
+            if file_names.len()>0{
+                status.push_str("200 OK");
+                response_body.push_str("All the files :");
+                file_names.sort();
+                for filename in file_names{
+                    response_body.push_str(format!("\n{}",filename).as_str());
+                }
+            }else {
+                status.push_str("200 OK");
+                response_body.push_str("No files found");
+            }
+        }
+```
+
+### Building the HTTP Response
+
+Every route handler builds a proper HTTP response:
+
+```rust
+    let response = format!(
+        "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: http://localhost:5173\r\nAccess-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n\r\n{}",
+        &status,&response_body.as_bytes().len(),&response_body
+    );
+
+    return response;
+}
+```
+
+The response follows HTTP format:
+1. Status line: `HTTP/1.1 200 OK`
+2. Headers: `Content-Length`, `Content-Type`, CORS headers
+3. Blank line (`\r\n\r\n`)
+4. Body
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Welcome message |
+| POST | `/create` | Create a new file |
+| POST | `/read` | Read file contents |
+| PUT | `/update` | Update a file |
+| GET | `/files` | List all files |
+
+### Example Usage
+
+**Create a file:**
+```bash
+curl -X POST http://localhost:8080/create \
+  -H "Content-Type: application/json" \
+  -d '{"filename": "hello.txt", "filecontent": "Hello, World!"}'
+```
+
+**Read a file:**
+```bash
+curl -X POST http://localhost:8080/read \
+  -H "Content-Type: application/json" \
+  -d '{"filename": "hello.txt"}'
+```
+
+**List all files:**
+```bash
+curl http://localhost:8080/files
+```
+
+## Key Takeaways
+
+1. **HTTP is just formatted text over TCP** - There's no magic. It's bytes with a specific format.
+
+2. **Headers and body are separated by `\r\n\r\n`** - This is the key pattern to detect when headers end.
+
+3. **Content-Length matters** - Without it, you don't know how much body data to read.
+
+4. **Pattern matching is powerful** - Rust's `match` on tuples makes routing elegant.
+
+5. **Error handling is crucial** - Every I/O operation can fail, and Rust forces you to handle it.
+
+## What's Missing (For Production)
+
+This is an educational server. For production use, you'd need:
+
+- **Multithreading/async** - Currently handles one request at a time
+- **Keep-alive connections** - We close after each request
+- **Chunked transfer encoding** - For streaming responses
+- **Better error handling** - More graceful failure modes
+- **Security** - Input validation, path traversal protection
+- **HTTPS** - TLS encryption
+
+## Conclusion
+
+Building an HTTP server from scratch teaches you what frameworks do for you—and why they exist. Understanding the raw TCP level makes you a better developer, even if you never write production code at this level.
+
+The complete source code is available in this repository. Feel free to experiment and extend it!
+
+---
+
+*Built with Rust and curiosity.*
